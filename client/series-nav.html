@@ -1,0 +1,164 @@
+<!--
+  Series Navigation Script for Blogger Theme
+  ============================================
+  Place this near the bottom of your post template (before </body>),
+  inside the area where individual posts are rendered.
+
+  Requires:
+    - A container element with id="series-nav" where Prev/Next links
+      will be injected. Place this where you want the nav to appear.
+    - CDN_BASE_URL updated to point to where your JSON files are hosted
+      (GitHub Pages or Cloudflare Pages root URL, no trailing slash).
+
+  IMPORTANT - Arabic / non-Latin labels:
+    Slugs for non-Latin labels are hash-based (e.g. "l-fe2e94bd89") and
+    can only be computed server-side (Node, in build-series-index.js).
+    The client CANNOT recompute these slugs from the label text alone.
+
+    Instead:
+      1. The client fetches all-labels.json once (small file).
+      2. It finds the entry matching the post's label TEXT (Arabic or
+         not - exact string match, no slugification needed client-side).
+      3. Uses that entry's "slug" to fetch series/<slug>.json.
+
+    This avoids needing to replicate the hash function in the browser.
+-->
+
+<div id="series-nav" data-labels="">
+  <!-- Prev/Next links will be inserted here -->
+</div>
+
+<script>
+(function () {
+  // ---- CONFIGURATION ----
+  var CDN_BASE_URL = 'https://your-username.github.io/your-repo'; // <-- update this (no trailing slash)
+
+  // Normalize URLs for comparison (strip protocol, trailing slash, query/hash)
+  function normalizeUrl(url) {
+    return url
+      .replace(/^https?:\/\//, '')
+      .replace(/\/+$/, '')
+      .split('?')[0]
+      .split('#')[0];
+  }
+
+  // ---- Get current post's labels ----
+  // Adapt this to however your Blogger theme exposes labels.
+  // Example in your post template:
+  //   <div id="series-nav" data-labels="<b:loop values='data:post.labels' var='label'><data:label.name/>|||</b:loop>"></div>
+  // (Using ||| as separator since Arabic labels may contain commas/spaces)
+  function getCurrentLabels() {
+    var container = document.getElementById('series-nav');
+    var raw = container.getAttribute('data-labels') || '';
+    return raw.split('|||').map(function (l) { return l.trim(); }).filter(Boolean);
+  }
+
+  // ---- Render Prev/Next ----
+  function renderNav(prevPost, nextPost) {
+    var container = document.getElementById('series-nav');
+    var html = '<div class="series-nav-links">';
+
+    if (prevPost) {
+      html += '<a class="series-nav-prev" href="' + prevPost.url + '">&larr; ' + prevPost.title + '</a>';
+    }
+    if (nextPost) {
+      html += '<a class="series-nav-next" href="' + nextPost.url + '">' + nextPost.title + ' &rarr;</a>';
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+  }
+
+  // ---- Main ----
+  function init() {
+    var labels = getCurrentLabels();
+    if (!labels.length) return;
+
+    var currentUrl = normalizeUrl(window.location.href);
+
+    // Step 1: fetch the label index to find the slug for this post's label.
+    // (Small file, browser-cached aggressively - cheap to fetch on every page.)
+    fetch(CDN_BASE_URL + '/all-labels.json')
+      .then(function (res) {
+        if (!res.ok) throw new Error('Label index not found');
+        return res.json();
+      })
+      .then(function (labelIndex) {
+        // Find the first label on this post that exists in the index.
+        var entry = null;
+        for (var i = 0; i < labels.length; i++) {
+          var match = labelIndex.find(function (e) { return e.label === labels[i]; });
+          if (match) { entry = match; break; }
+        }
+        if (!entry) return null;
+
+        // Step 2: fetch that label's series file using the precomputed slug.
+        return fetch(CDN_BASE_URL + '/series/' + entry.slug + '.json')
+          .then(function (res) {
+            if (!res.ok) throw new Error('Series file not found: ' + entry.slug);
+            return res.json();
+          });
+      })
+      .then(function (episodes) {
+        if (!episodes) return;
+
+        var index = episodes.findIndex(function (ep) {
+          return normalizeUrl(ep.url) === currentUrl;
+        });
+
+        if (index === -1) {
+          // Current post not yet in the index (e.g. just published,
+          // index hasn't rebuilt yet). Hide nav gracefully.
+          return;
+        }
+
+        var prevPost = index > 0 ? episodes[index - 1] : null;
+        var nextPost = index < episodes.length - 1 ? episodes[index + 1] : null;
+
+        if (prevPost || nextPost) {
+          renderNav(prevPost, nextPost);
+        }
+      })
+      .catch(function (err) {
+        console.warn('Series nav unavailable:', err);
+        // Fail silently - just don't show nav
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+<style>
+.series-nav-links {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1.5rem 0;
+  padding: 1rem 0;
+  border-top: 1px solid #e0e0e0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.series-nav-prev,
+.series-nav-next {
+  text-decoration: none;
+  color: inherit;
+  font-weight: 500;
+  max-width: 48%;
+}
+
+.series-nav-next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.series-nav-prev:hover,
+.series-nav-next:hover {
+  text-decoration: underline;
+}
+</style>
