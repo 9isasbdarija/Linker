@@ -1,0 +1,5 @@
+/series/*
+  Cache-Control: public, max-age=300, s-maxage=3600
+
+/all-labels.json
+  Cache-Control: public, max-age=300, s-maxage=3600
