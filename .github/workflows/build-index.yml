@@ -31,6 +31,11 @@ jobs:
           BLOG_ID: ${{ secrets.BLOG_ID }}
         run: node scripts/build-series-index.js
 
+      - name: Update last-run timestamp
+        run: |
+          mkdir -p output
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > output/last-updated.txt
+
       - name: Commit and push generated files
         run: |
           git config user.name "github-actions[bot]"
@@ -38,8 +43,3 @@ jobs:
           git add -f output/
           git diff --staged --quiet || git commit -m "Update series index [automated]"
           git push
-
-      - name: Update last-run timestamp
-        run: |
-          mkdir -p output
-          date -u +"%Y-%m-%dT%H:%M:%SZ" > output/last-updated.txt
