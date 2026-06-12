@@ -112,7 +112,7 @@ function writeOutput(groups) {
 
   for (const [slug, group] of groups.entries()) {
     const filePath = path.join(OUTPUT_DIR, `${slug}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(group.posts, null, 2));
+    fs.writeFileSync(filePath, JSON.stringify(group.posts));
     labelIndex.push({
       label: group.label,
       slug,
@@ -125,7 +125,7 @@ function writeOutput(groups) {
 
   fs.writeFileSync(
     path.join(__dirname, '..', 'output', 'all-labels.json'),
-    JSON.stringify(labelIndex, null, 2)
+    JSON.stringify(labelIndex)
   );
 
   return labelIndex;
