@@ -1,0 +1,39 @@
+name: Update Single Story Label
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_label:
+        description: 'The exact label to update (passed from Cloudflare Worker)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update-single:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run targeted build script
+        env:
+          BLOGGER_API_KEY: ${{ secrets.BLOGGER_API_KEY }}
+          BLOG_ID: ${{ secrets.BLOG_ID }}
+
+        run: node scripts/update-single-label.js "${{ github.event.inputs.target_label }}"
+
+      - name: Commit and push updated file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f output/
+          git diff --staged --quiet || git commit -m "Update specific label: ${{ github.event.inputs.target_label }} [websub]"
+          git push
