@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: update-single-label
+
 jobs:
   update-single:
     runs-on: ubuntu-latest
@@ -37,9 +40,7 @@ jobs:
           git add -f output/
           git diff --staged --quiet || git commit -m "Update specific label: ${{ github.event.inputs.target_label }} [websub]"
           for i in 1 2 3 4 5; do
-            git push && exit 0
-            git fetch origin main
-            git rebase origin/main || { git rebase --abort; sleep 5; continue; }
-            sleep 5
+            git pull --rebase origin main && git push && exit 0
+            sleep 10
           done
           exit 1
