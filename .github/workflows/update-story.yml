@@ -13,6 +13,7 @@ permissions:
 
 concurrency:
   group: update-single-label
+  cancel-in-progress: false
 
 jobs:
   update-single:
