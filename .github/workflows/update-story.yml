@@ -12,8 +12,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: update-single-label-${{ github.event.inputs.target_label }}
+  group: update-single-label
   cancel-in-progress: false
+  queue: max
 
 jobs:
   update-single:
