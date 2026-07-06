@@ -1,5 +1,0 @@
-/series/*
-  Cache-Control: public, max-age=0, must-revalidate
-
-/all-labels.json
-  Cache-Control: public, max-age=0, must-revalidate

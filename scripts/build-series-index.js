@@ -18,15 +18,35 @@ const crypto = require('crypto');
 const API_KEY = process.env.BLOGGER_API_KEY;
 const BLOG_ID = process.env.BLOG_ID;
 const OUTPUT_DIR = path.join(__dirname, '..', 'output', 'series');
+const LOG_DIR = path.join(__dirname, '..', 'output', 'logs');
+const RUN_ID = new Date().toISOString().replace(/[:.]/g, '-');
+const LOG_FILE = path.join(LOG_DIR, `${RUN_ID}.log`);
+const RAW_DIR = path.join(LOG_DIR, `${RUN_ID}-raw`);
+const DEBUG = process.env.DEBUG === '1'; // ponytail: env-gated, not machine-detected
+
+if (DEBUG) fs.mkdirSync(LOG_DIR, { recursive: true });
+const logStream = DEBUG ? fs.createWriteStream(LOG_FILE, { flags: 'a' }) : null;
+
+// Log to both console and the run's log file.
+function log(...args) {
+  const line = args.map(a => (a instanceof Error ? a.stack : String(a))).join(' ');
+  console.log(line);
+  if (logStream) logStream.write(line + '\n');
+}
+function logError(...args) {
+  const line = args.map(a => (a instanceof Error ? a.stack : String(a))).join(' ');
+  console.error(line);
+  logStream.write('ERROR: ' + line + '\n');
+}
 
 if (!API_KEY || !BLOG_ID) {
-  console.error('Error: BLOGGER_API_KEY and BLOG_ID environment variables are required.');
+  logError('BLOGGER_API_KEY and BLOG_ID environment variables are required.');
   process.exit(1);
 }
 
 const BASE_URL = `https://www.googleapis.com/blogger/v3/blogs/${BLOG_ID}/posts`;
 const MAX_RESULTS = 500; // max allowed by Blogger API v3 when fetchBodies=false
-const FIELDS = 'nextPageToken,items(title,url,labels,published)';
+const FIELDS = 'items(title,url,labels,published)';
 
 // Slugify a label for use as a filename/URL segment.
 // All labels are hashed uniformly (deterministic MD5-based), avoiding
@@ -38,38 +58,87 @@ function slugify(label) {
   return 'l-' + hash;
 }
 
-// Fetch a single page of posts.
-async function fetchPage(pageToken) {
+// Fetch a single page of posts, optionally bounded by endDate (inclusive).
+async function fetchPage(endDate, pageNum) {
   const url = new URL(BASE_URL);
   url.searchParams.set('key', API_KEY);
   url.searchParams.set('fetchBodies', 'false');
   url.searchParams.set('maxResults', String(MAX_RESULTS));
   url.searchParams.set('fields', FIELDS);
   url.searchParams.set('orderBy', 'published');
-  if (pageToken) url.searchParams.set('pageToken', pageToken);
+  if (endDate) url.searchParams.set('endDate', endDate);
 
   const res = await fetch(url.toString());
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Blogger API error ${res.status}: ${body}`);
+  const bodyText = await res.text();
+
+  // Save the raw response for debugging, success or failure.
+  if (DEBUG) {
+    fs.mkdirSync(RAW_DIR, { recursive: true });
+    fs.writeFileSync(path.join(RAW_DIR, `page-${pageNum}.json`), bodyText);
   }
-  return res.json();
+
+  if (!res.ok) {
+    throw new Error(`Blogger API error ${res.status}: ${bodyText}`);
+  }
+  return JSON.parse(bodyText);
 }
 
-// Fetch all posts across all pages.
+// Fetch all posts by walking backward through published dates using endDate,
+// instead of Blogger's pageToken. pageToken's cursor is based on the published
+// timestamp, not a unique row ID, so when a page boundary falls in the middle
+// of a group of posts sharing the exact same published timestamp, some of
+// those posts get silently skipped. To avoid that: whenever a page comes back
+// full (MAX_RESULTS items), we don't trust the last timestamp group on that
+// page to be complete (it may have been cut off), so we hold those posts back
+// and re-fetch starting from the previous distinct timestamp instead. That
+// re-fetch pulls the held-back group in full (deduped) and continues.
 async function fetchAllPosts() {
-  let posts = [];
-  let pageToken = undefined;
+  const seen = new Set(); // post urls already collected
+  const posts = [];
+
+  function addUnique(item) {
+    if (seen.has(item.url)) return;
+    seen.add(item.url);
+    posts.push(item);
+  }
+
+  let endDate;
   let page = 1;
 
-  do {
-    console.log(`Fetching page ${page}${pageToken ? ` (token: ${pageToken.slice(0, 12)}...)` : ''}...`);
-    const data = await fetchPage(pageToken);
+  for (;;) {
+    log(`Fetching page ${page}${endDate ? ` (endDate: ${endDate})` : ''}...`);
+    const data = await fetchPage(endDate, page);
     const items = data.items || [];
-    posts = posts.concat(items);
-    pageToken = data.nextPageToken;
+    if (items.length === 0) break;
+
+    if (items.length < MAX_RESULTS) {
+      // Short page: nothing after it, so nothing here can have been truncated.
+      items.forEach(addUnique);
+      break;
+    }
+
+    // Full page: the last timestamp group may be incomplete. Find where it starts.
+    const lastTs = items[items.length - 1].published;
+    let boundary = items.length - 1;
+    while (boundary > 0 && items[boundary - 1].published === lastTs) boundary--;
+
+    if (boundary === 0) {
+      // ponytail: every post on this page shares one timestamp, so there's no
+      // safe earlier boundary to re-anchor on. Accept the page as-is; this only
+      // matters if >MAX_RESULTS posts share one exact published timestamp.
+      logError(`All ${items.length} posts on page ${page} share timestamp ${lastTs}; cannot verify completeness.`);
+      items.forEach(addUnique);
+      break;
+    }
+
+    // Everything before the (possibly incomplete) tail group is safe to keep.
+    for (let i = 0; i < boundary; i++) addUnique(items[i]);
+
+    // Re-anchor on the last fully-confirmed group; it'll come back (deduped)
+    // along with the rest of the tail group on the next fetch.
+    endDate = items[boundary - 1].published;
     page++;
-  } while (pageToken);
+  }
 
   return posts;
 }
@@ -132,20 +201,25 @@ function writeOutput(groups) {
 }
 
 async function main() {
-  console.log(`Fetching all posts for blog ${BLOG_ID}...`);
+  log(`Run started. Log file: ${LOG_FILE}`);
+  log(`Fetching all posts for blog ${BLOG_ID}...`);
   const posts = await fetchAllPosts();
-  console.log(`Fetched ${posts.length} posts.`);
+  log(`Fetched ${posts.length} posts.`);
 
   const groups = groupByLabel(posts);
-  console.log(`Found ${groups.size} unique labels.`);
+  log(`Found ${groups.size} unique labels.`);
 
   const labelIndex = writeOutput(groups);
 
-  console.log(`Wrote ${labelIndex.length} series files to ${OUTPUT_DIR}`);
-  console.log('Done.');
+  log(`Wrote ${labelIndex.length} series files to ${OUTPUT_DIR}`);
+  log('Done.');
 }
 
-main().catch((err) => {
-  console.error('Build failed:', err);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    logError('Build failed:', err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (logStream) logStream.end();
+  });
