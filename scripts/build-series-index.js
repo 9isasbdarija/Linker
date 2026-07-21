@@ -13,7 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const { slugify } = require('./fnv-slugify.js');
 
 const API_KEY = process.env.BLOGGER_API_KEY;
 const BLOG_ID = process.env.BLOG_ID;
@@ -46,23 +46,14 @@ if (!API_KEY || !BLOG_ID) {
 
 const BASE_URL = `https://www.googleapis.com/blogger/v3/blogs/${BLOG_ID}/posts`;
 const MAX_RESULTS = 500; // max allowed by Blogger API v3 when fetchBodies=false
-const FIELDS = 'items(title,url,labels,published)';
-
-// Slugify a label for use as a filename/URL segment.
-// All labels are hashed uniformly (deterministic MD5-based), avoiding
-// any edge cases with collisions, mixed-script labels, or unsafe
-// filename characters. The human-readable label is preserved separately
-// in all-labels.json for lookup/debugging.
-function slugify(label) {
-  const hash = crypto.createHash('md5').update(label).digest('hex').slice(0, 10);
-  return 'l-' + hash;
-}
+const FIELDS = 'items(title,url,labels,published,images)';
 
 // Fetch a single page of posts, optionally bounded by endDate (inclusive).
 async function fetchPage(endDate, pageNum) {
   const url = new URL(BASE_URL);
   url.searchParams.set('key', API_KEY);
   url.searchParams.set('fetchBodies', 'false');
+  url.searchParams.set('fetchImages', 'true');
   url.searchParams.set('maxResults', String(MAX_RESULTS));
   url.searchParams.set('fields', FIELDS);
   url.searchParams.set('orderBy', 'published');
@@ -157,11 +148,16 @@ function groupByLabel(posts) {
       if (!groups.has(slug)) {
         groups.set(slug, { label, posts: [] });
       }
-      groups.get(slug).posts.push({
+      const entry = {
         title: post.title,
         url: post.url,
         published: post.published,
-      });
+        labels: post.labels
+      };
+      if (post.images && post.images[0] && post.images[0].url) {
+        entry.image = post.images[0].url;
+      }
+      groups.get(slug).posts.push(entry);
     }
   }
 

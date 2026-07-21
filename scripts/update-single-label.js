@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const { slugify } = require('./fnv-slugify.js');
 
 const API_KEY = process.env.BLOGGER_API_KEY;
 const BLOG_ID = process.env.BLOG_ID;
@@ -34,13 +34,7 @@ if (!TARGET_LABEL) {
 
 const BASE_URL = `https://www.googleapis.com/blogger/v3/blogs/${BLOG_ID}/posts`;
 const MAX_RESULTS = 500;
-const FIELDS = 'nextPageToken,items(title,url,labels,published)';
-
-// 2. Use the exact same slugify logic to ensure we overwrite the right file
-function slugify(label) {
-  const hash = crypto.createHash('md5').update(label).digest('hex').slice(0, 10);
-  return 'l-' + hash;
-}
+const FIELDS = 'nextPageToken,items(title,url,labels,published,images)';
 
 // 3. Fetch ONLY posts that contain the target label
 async function fetchPostsByLabel(label) {
@@ -53,6 +47,7 @@ async function fetchPostsByLabel(label) {
     const url = new URL(BASE_URL);
     url.searchParams.set('key', API_KEY);
     url.searchParams.set('fetchBodies', 'false');
+    url.searchParams.set('fetchImages', 'true');
     url.searchParams.set('maxResults', String(MAX_RESULTS));
     url.searchParams.set('fields', FIELDS);
     url.searchParams.set('orderBy', 'published');
@@ -92,11 +87,18 @@ async function main() {
   // 4. Format and sort the posts exactly like the main script
   const formattedPosts = posts
     .filter(post => post.url && post.title)
-    .map(post => ({
-      title: post.title,
-      url: post.url,
-      published: post.published,
-    }))
+    .map(post => {
+      const entry = {
+        title: post.title,
+        url: post.url,
+        published: post.published,
+        labels: post.labels
+      };
+      if (post.images && post.images[0] && post.images[0].url) {
+        entry.image = post.images[0].url;
+      }
+      return entry;
+    })
     .sort((a, b) => new Date(a.published) - new Date(b.published));
 
   // 5. Generate the slug and overwrite the file
